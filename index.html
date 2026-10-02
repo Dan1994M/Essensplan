@@ -28,6 +28,7 @@ button.ic{padding:8px 10px;background:transparent;font-size:19px}
 button.del{color:var(--warn);background:transparent}
 input,select,textarea{font:inherit;width:100%;padding:10px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx)}
 label{display:block;font-size:13px;color:var(--mu);margin:10px 0 4px}
+.chip a{cursor:pointer;color:var(--mu);margin-left:2px}
 .chip{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;background:var(--acs);margin:2px 4px 0 0}
 nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--bd);padding-bottom:env(safe-area-inset-bottom)}
 nav button{flex:1;background:none;border-radius:0;padding:10px 0 8px;font-size:12px;color:var(--mu)}
@@ -61,12 +62,13 @@ dialog::backdrop{background:#0007}
 <dialog id="dlg"></dialog>
 <script>
 const KEY='essensplan_v1',FILE='/essensplan.json';
-const DEF={dishes:[],plan:{},shop:{checked:{},extra:[]},settings:{
+const DEF={dishes:[],ingredients:[],plan:{},shop:{checked:{},extra:[]},settings:{
  noRepeat:10,varyCat:true,varySide:true,quickWeekdays:true,favWeight:2,
  cats:['Fleisch','Geflügel','Fisch','Vegetarisch','Vegan'],
  sides:['Pasta','Reis','Kartoffeln','Brot','Gemüse','Sonstiges'],
  shopDays:7},updated:0};
-let S=load(),tab='plan',range=7;
+let S=load(),tab='plan',range=7,curIng=[];
+migrateCat();
 function load(){try{return Object.assign(structuredClone(DEF),JSON.parse(localStorage.getItem(KEY)))}catch{return structuredClone(DEF)}}
 function save(push=true){S.updated=Date.now();localStorage.setItem(KEY,JSON.stringify(S));if(push)schedulePush()}
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -77,6 +79,14 @@ const today=()=>iso(new Date());
 const WD=['So','Mo','Di','Mi','Do','Fr','Sa'];
 const dish=id=>S.dishes.find(d=>d.id===id);
 const EFF={1:'schnell',2:'mittel',3:'aufwendig'};
+
+/* ---------- Zutaten-Katalog ---------- */
+function addIng(n){n=String(n||'').trim();if(!n)return'';const e=S.ingredients.find(x=>x.toLowerCase()===n.toLowerCase());if(e)return e;S.ingredients.push(n);S.ingredients.sort((a,b)=>a.localeCompare(b));return n}
+function migrateCat(){const c=S.ingredients.length;S.dishes.forEach(d=>d.ing=(d.ing||[]).map(addIng));S.shop.extra.forEach(e=>e.n=addIng(e.n));if(S.ingredients.length!==c)localStorage.setItem(KEY,JSON.stringify(S))}
+const dlist=()=>`<datalist id="inglist">${S.ingredients.map(x=>`<option value="${esc(x)}">`).join('')}</datalist>`;
+function ingChips(){return curIng.map((x,i)=>`<span class="chip">${esc(x)} <a onclick="curIng.splice(${i},1);$('#ic').innerHTML=ingChips()">✕</a></span>`).join('')||'<span class="mu">noch keine</span>'}
+function addCurIng(){const i=$('#fi'),n=addIng(i.value);if(n&&!curIng.some(x=>x.toLowerCase()===n.toLowerCase()))curIng.push(n);i.value='';$('#ic').innerHTML=ingChips();i.focus()}
+function delCat(i){if(!confirm(`„${S.ingredients[i]}“ aus dem Katalog entfernen? (Bleibt in bestehenden Gerichten erhalten)`))return;S.ingredients.splice(i,1);save();render()}
 
 /* ---------- Generator ---------- */
 function pick(date,ctx){
@@ -147,7 +157,8 @@ function editDish(id){
  <label>Name</label><input id="fn" value="${esc(d.name)}">
  <div class="row"><div class="grow"><label>Kategorie</label>${sel('fc',st.cats,d.cat)}</div><div class="grow"><label>Beilage</label>${sel('fs',st.sides,d.side)}</div></div>
  <label>Aufwand</label><select id="fe">${[1,2,3].map(n=>`<option value="${n}" ${d.eff==n?'selected':''}>${EFF[n]}</option>`).join('')}</select>
- <label>Zutaten (eine pro Zeile, ohne Mengen)</label><textarea id="fi" rows="5">${esc((d.ing||[]).join('\n'))}</textarea>
+ <label>Zutaten</label><div id="ic">${(curIng=[...(d.ing||[])],ingChips())}</div>
+ <div class="row" style="margin-top:6px"><input id="fi" list="inglist" placeholder="Zutat wählen oder neu eingeben" onkeydown="if(event.key=='Enter'){event.preventDefault();addCurIng()}"><button onclick="addCurIng()">＋</button></div>${dlist()}
  <div class="sw"><span>★ Favorit (öfter einplanen)</span><input type="checkbox" id="ff" ${d.fav?'checked':''}></div>
  <div class="sw"><span>Pausiert (nicht einplanen)</span><input type="checkbox" id="fo" ${d.off?'checked':''}></div>
  <div class="row" style="margin-top:12px">${id?`<button class="del" onclick="delDish('${id}')">Löschen</button>`:''}<span class="grow"></span>
@@ -156,7 +167,7 @@ function editDish(id){
 function saveDish(id){
  const name=$('#fn').value.trim();if(!name)return alert('Name fehlt');
  const o={id,name,cat:$('#fc').value,side:$('#fs').value,eff:+$('#fe').value,fav:$('#ff').checked,off:$('#fo').checked,
-  ing:$('#fi').value.split('\n').map(s=>s.trim()).filter(Boolean)};
+  ing:(addCurIng(),curIng)};
  const i=S.dishes.findIndex(d=>d.id===id);i<0?S.dishes.push(o):S.dishes[i]=o;$('#dlg').close();save();render()}
 function delDish(id){if(!confirm('Gericht löschen?'))return;S.dishes=S.dishes.filter(d=>d.id!==id);for(const k in S.plan)if(S.plan[k].id===id)delete S.plan[k];$('#dlg').close();save();render()}
 
@@ -170,11 +181,11 @@ function vShop(){
  let h=`<div class="row"><span class="mu grow">Für die nächsten ${S.settings.shopDays} Tage</span><button onclick="resetShop()">Haken zurücksetzen</button></div>`;
  h+=`<div class="card">${it.length?it.map(e=>`<label class="chk ${ck[e.n.toLowerCase()]?'done':''}"><input type="checkbox" ${ck[e.n.toLowerCase()]?'checked':''} onchange="tick('${esc(e.n.toLowerCase())}')"><span class="grow">${esc(e.n)}${e.c>1?` <b>×${e.c}</b>`:''}<br><span class="mu">${esc([...new Set(e.from)].join(', '))}</span></span></label>`).join(''):'<span class="mu">Keine Zutaten im geplanten Zeitraum.</span>'}</div>`;
  h+=`<h2>Zusätzlich</h2><div class="card">${S.shop.extra.map((e,i)=>`<label class="chk ${e.done?'done':''}"><input type="checkbox" ${e.done?'checked':''} onchange="S.shop.extra[${i}].done=!S.shop.extra[${i}].done;save();render()"><span class="grow">${esc(e.n)}</span><button class="del" onclick="S.shop.extra.splice(${i},1);save();render()">✕</button></label>`).join('')}
- <div class="row" style="margin-top:8px"><input id="ex" placeholder="z. B. Spülmittel" onkeydown="if(event.key=='Enter')addExtra()"><button onclick="addExtra()">＋</button></div></div>`;
+ <div class="row" style="margin-top:8px"><input id="ex" list="inglist" placeholder="z. B. Spülmittel" onkeydown="if(event.key=='Enter')addExtra()"><button onclick="addExtra()">＋</button></div>${dlist()}</div>`;
  return h}
 function tick(k){S.shop.checked[k]=!S.shop.checked[k];save();render()}
 function resetShop(){S.shop.checked={};S.shop.extra=S.shop.extra.filter(e=>!e.done);save();render()}
-function addExtra(){const v=$('#ex').value.trim();if(v){S.shop.extra.push({n:v,done:false});save();render()}}
+function addExtra(){const v=$('#ex').value.trim();if(v){S.shop.extra.push({n:addIng(v),done:false});save();render()}}
 
 function vSet(){
  const st=S.settings,tg=(k,l)=>`<div class="sw"><span>${l}</span><input type="checkbox" ${st[k]?'checked':''} onchange="S.settings.${k}=this.checked;save()"></div>`;
@@ -190,6 +201,7 @@ function vSet(){
  <label>Kategorien (kommagetrennt)</label><input value="${esc(st.cats.join(', '))}" onchange="S.settings.cats=this.value.split(',').map(s=>s.trim()).filter(Boolean);save()">
  <label>Beilagen (kommagetrennt)</label><input value="${esc(st.sides.join(', '))}" onchange="S.settings.sides=this.value.split(',').map(s=>s.trim()).filter(Boolean);save()">
  ${num('shopDays','Einkaufsliste für die nächsten X Tage',1,31)}</div>
+ <h2>Zutaten-Katalog (${S.ingredients.length})</h2><div class="card">${S.ingredients.map((x,i)=>`<span class="chip">${esc(x)} <a onclick="delCat(${i})">✕</a></span>`).join('')||'<span class="mu">Wird automatisch aus Gerichten und Einkaufsliste befüllt.</span>'}</div>
  <h2>Dropbox-Sync</h2><div class="card">
  <label>Dropbox App-Key</label><input id="ak" value="${esc(localStorage.getItem('dbx_key')||'')}" onchange="localStorage.setItem('dbx_key',this.value.trim())">
  <p class="mu">Redirect-URI in der Dropbox-App eintragen: <b>${esc(redirect())}</b></p>
