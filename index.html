@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Essensplan">
+<meta name="theme-color" content="#16a34a">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>Essensplan</title>
+<style>
+:root{--bg:#f4f5f2;--card:#fff;--tx:#1c1f1a;--mu:#6b7266;--ac:#16a34a;--acs:#dcfce7;--bd:#e3e6df;--warn:#dc2626}
+@media(prefers-color-scheme:dark){:root{--bg:#121411;--card:#1d201b;--tx:#eef0ea;--mu:#9aa294;--acs:#14532d;--bd:#2c3029}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;font:16px/1.4 -apple-system,system-ui,sans-serif;background:var(--bg);color:var(--tx);padding:env(safe-area-inset-top) 0 calc(70px + env(safe-area-inset-bottom))}
+header{padding:14px 16px 6px;display:flex;justify-content:space-between;align-items:center}
+h1{font-size:24px;margin:0}h2{font-size:17px;margin:18px 0 8px}
+main{padding:0 16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:12px;margin-bottom:10px}
+.row{display:flex;gap:8px;align-items:center}
+.grow{flex:1;min-width:0}
+.mu{color:var(--mu);font-size:13px}
+button,.btn{font:inherit;border:0;border-radius:10px;padding:9px 14px;background:var(--acs);color:var(--tx);cursor:pointer}
+button.pri{background:var(--ac);color:#fff}
+button.ic{padding:8px 10px;background:transparent;font-size:19px}
+button.del{color:var(--warn);background:transparent}
+input,select,textarea{font:inherit;width:100%;padding:10px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx)}
+label{display:block;font-size:13px;color:var(--mu);margin:10px 0 4px}
+.chip{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;background:var(--acs);margin:2px 4px 0 0}
+nav{position:fixed;bottom:0;left:0;right:0;display:flex;background:var(--card);border-top:1px solid var(--bd);padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;background:none;border-radius:0;padding:10px 0 8px;font-size:12px;color:var(--mu)}
+nav button b{display:block;font-size:21px}
+nav button.on{color:var(--ac)}
+.day.locked{border-color:var(--ac)}
+.day .d{width:62px;font-size:13px;color:var(--mu)}
+.day.today .d{color:var(--ac);font-weight:600}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg button.on{background:var(--ac);color:#fff}
+.chk{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd)}
+.chk:last-child{border:0}
+.chk input{width:22px;height:22px}
+.chk.done span{text-decoration:line-through;color:var(--mu)}
+dialog{border:0;border-radius:16px;padding:16px;width:min(94vw,480px);background:var(--card);color:var(--tx)}
+dialog::backdrop{background:#0007}
+.sw{display:flex;justify-content:space-between;align-items:center;padding:6px 0}
+.sw input{width:auto}
+#sync{font-size:12px}
+</style>
+</head>
+<body>
+<header><h1 id="ttl">Plan</h1><span id="sync" class="mu"></span></header>
+<main id="v"></main>
+<nav>
+<button data-t="plan" class="on"><b>📅</b>Plan</button>
+<button data-t="dishes"><b>🍲</b>Gerichte</button>
+<button data-t="shop"><b>🛒</b>Einkauf</button>
+<button data-t="set"><b>⚙️</b>Einstellungen</button>
+</nav>
+<dialog id="dlg"></dialog>
+<script>
+const KEY='essensplan_v1',FILE='/essensplan.json';
+const DEF={dishes:[],plan:{},shop:{checked:{},extra:[]},settings:{
+ noRepeat:10,varyCat:true,varySide:true,quickWeekdays:true,favWeight:2,
+ cats:['Fleisch','Geflügel','Fisch','Vegetarisch','Vegan'],
+ sides:['Pasta','Reis','Kartoffeln','Brot','Gemüse','Sonstiges'],
+ shopDays:7},updated:0};
+let S=load(),tab='plan',range=7;
+function load(){try{return Object.assign(structuredClone(DEF),JSON.parse(localStorage.getItem(KEY)))}catch{return structuredClone(DEF)}}
+function save(push=true){S.updated=Date.now();localStorage.setItem(KEY,JSON.stringify(S));if(push)schedulePush()}
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const uid=()=>Math.random().toString(36).slice(2,10);
+const iso=d=>{const x=new Date(d);x.setMinutes(x.getMinutes()-x.getTimezoneOffset());return x.toISOString().slice(0,10)};
+const addD=(s,n)=>{const d=new Date(s+'T12:00');d.setDate(d.getDate()+n);return iso(d)};
+const today=()=>iso(new Date());
+const WD=['So','Mo','Di','Mi','Do','Fr','Sa'];
+const dish=id=>S.dishes.find(d=>d.id===id);
+const EFF={1:'schnell',2:'mittel',3:'aufwendig'};
+
+/* ---------- Generator ---------- */
+function pick(date,ctx){
+ const st=S.settings,wd=new Date(date+'T12:00').getDay(),weekday=wd>0&&wd<6;
+ const recent=new Set();
+ for(let i=1;i<=st.noRepeat;i++){[addD(date,-i),addD(date,i)].forEach(k=>{const id=(ctx[k]??S.plan[k])?.id;if(id)recent.add(id)})}
+ const prev=dish((ctx[addD(date,-1)]??S.plan[addD(date,-1)])?.id);
+ const score=d=>{
+  let w=d.fav?st.favWeight:1;
+  if(prev&&st.varyCat&&d.cat===prev.cat)w*=.15;
+  if(prev&&st.varySide&&d.side===prev.side)w*=.15;
+  if(st.quickWeekdays&&weekday&&d.eff==3)w*=.05;
+  if(st.quickWeekdays&&!weekday&&d.eff==3)w*=1.5;
+  return w};
+ let pool=S.dishes.filter(d=>!d.off&&!recent.has(d.id));
+ if(!pool.length)pool=S.dishes.filter(d=>!d.off&&d.id!==prev?.id);
+ if(!pool.length)pool=S.dishes.filter(d=>!d.off);
+ if(!pool.length)return null;
+ const ws=pool.map(score),tot=ws.reduce((a,b)=>a+b,0);let r=Math.random()*tot;
+ for(let i=0;i<pool.length;i++){r-=ws[i];if(r<=0)return pool[i].id}
+ return pool.at(-1).id}
+function generate(start,n){
+ if(!S.dishes.length)return alert('Bitte zuerst Gerichte anlegen.');
+ const ctx={};
+ for(let i=0;i<n;i++){const k=addD(start,i);if(S.plan[k]?.locked)continue;ctx[k]=null}
+ for(let i=0;i<n;i++){const k=addD(start,i);if(S.plan[k]?.locked)continue;const id=pick(k,ctx);ctx[k]={id};S.plan[k]={id,locked:false}}
+ save();render()}
+function reroll(k){const ctx={[k]:null};S.plan[k]={id:pick(k,ctx),locked:false};save();render()}
+
+/* ---------- Views ---------- */
+function vPlan(){
+ const t=today(),days=[...Array(range)].map((_,i)=>addD(t,i));
+ let h=`<div class="seg">${[[1,'Morgen'],[7,'Woche'],[30,'Monat']].map(([n,l])=>`<button class="${range==n?'on':''}" onclick="range=${n};render()">${l}</button>`).join('')}
+ <button class="${![1,7,30].includes(range)?'on':''}" onclick="customRange()">${![1,7,30].includes(range)?range+' Tage':'X Tage'}</button></div>
+ <div class="row" style="margin:10px 0"><button class="pri grow" onclick="generate('${range==1?addD(t,1):t}',${range})">🎲 Plan generieren</button>
+ <button onclick="clearPlan()">Leeren</button></div>`;
+ const list=range==1?[addD(t,1)]:days;
+ h+=list.map(k=>{const p=S.plan[k],d=p&&dish(p.id),x=new Date(k+'T12:00');
+  return `<div class="card day row ${p?.locked?'locked':''} ${k==t?'today':''}">
+  <div class="d">${k==t?'Heute':WD[x.getDay()]}<br>${x.getDate()}.${x.getMonth()+1}.</div>
+  <div class="grow" onclick="choose('${k}')">${d?`<b>${esc(d.name)}</b><div>${tags(d)}</div>`:'<span class="mu">— nichts geplant —</span>'}</div>
+  <button class="ic" onclick="reroll('${k}')" title="Neu würfeln">🎲</button>
+  <button class="ic" onclick="toggleLock('${k}')" title="Sperren">${p?.locked?'🔒':'🔓'}</button></div>`}).join('');
+ return h}
+function tags(d){return [d.cat,d.side,EFF[d.eff]].filter(Boolean).map(t=>`<span class="chip">${esc(t)}</span>`).join('')+(d.fav?'<span class="chip">★</span>':'')}
+function customRange(){const n=parseInt(prompt('Wie viele Tage?',range));if(n>0&&n<=90){range=n;render()}}
+function toggleLock(k){if(!S.plan[k])return;S.plan[k].locked=!S.plan[k].locked;save();render()}
+function clearPlan(){if(!confirm('Ungesperrte Einträge ab heute löschen?'))return;const t=today();for(const k in S.plan)if(k>=t&&!S.plan[k].locked)delete S.plan[k];save();render()}
+function choose(k){
+ const dl=$('#dlg'),opts=[...S.dishes].sort((a,b)=>a.name.localeCompare(b.name));
+ dl.innerHTML=`<h2>Gericht für ${k.split('-').reverse().join('.')}</h2>
+ <input id="q" placeholder="Suchen…" oninput="[...document.querySelectorAll('#ol .chk')].forEach(e=>e.style.display=e.textContent.toLowerCase().includes(this.value.toLowerCase())?'':'none')">
+ <div id="ol" style="max-height:50vh;overflow:auto;margin-top:8px">${opts.map(d=>`<div class="chk" onclick="setDay('${k}','${d.id}')"><span>${esc(d.name)}</span></div>`).join('')}</div>
+ <div class="row" style="margin-top:10px"><button class="del" onclick="setDay('${k}',null)">Entfernen</button><span class="grow"></span><button onclick="dlg.close()">Abbrechen</button></div>`;
+ dl.showModal()}
+function setDay(k,id){if(id)S.plan[k]={id,locked:true};else delete S.plan[k];$('#dlg').close();save();render()}
+
+function vDishes(){
+ let h=`<button class="pri" style="width:100%;margin-bottom:10px" onclick="editDish()">＋ Gericht hinzufügen</button>`;
+ if(!S.dishes.length)h+='<p class="mu">Noch keine Gerichte. Leg ein paar an – der Generator braucht Auswahl.</p>';
+ h+=[...S.dishes].sort((a,b)=>a.name.localeCompare(b.name)).map(d=>`<div class="card row" onclick="editDish('${d.id}')" style="${d.off?'opacity:.5':''}">
+ <div class="grow"><b>${esc(d.name)}</b><div>${tags(d)}</div>${d.ing?.length?`<div class="mu">${esc(d.ing.join(', '))}</div>`:''}</div></div>`).join('');
+ return h}
+function editDish(id){
+ const d=id?dish(id):{id:uid(),name:'',cat:'',side:'',eff:2,fav:false,off:false,ing:[]},st=S.settings,dl=$('#dlg');
+ const sel=(n,arr,v)=>`<select id="${n}"><option value="">–</option>${arr.map(x=>`<option ${x==v?'selected':''}>${esc(x)}</option>`).join('')}</select>`;
+ dl.innerHTML=`<h2>${id?'Gericht bearbeiten':'Neues Gericht'}</h2>
+ <label>Name</label><input id="fn" value="${esc(d.name)}">
+ <div class="row"><div class="grow"><label>Kategorie</label>${sel('fc',st.cats,d.cat)}</div><div class="grow"><label>Beilage</label>${sel('fs',st.sides,d.side)}</div></div>
+ <label>Aufwand</label><select id="fe">${[1,2,3].map(n=>`<option value="${n}" ${d.eff==n?'selected':''}>${EFF[n]}</option>`).join('')}</select>
+ <label>Zutaten (eine pro Zeile, ohne Mengen)</label><textarea id="fi" rows="5">${esc((d.ing||[]).join('\n'))}</textarea>
+ <div class="sw"><span>★ Favorit (öfter einplanen)</span><input type="checkbox" id="ff" ${d.fav?'checked':''}></div>
+ <div class="sw"><span>Pausiert (nicht einplanen)</span><input type="checkbox" id="fo" ${d.off?'checked':''}></div>
+ <div class="row" style="margin-top:12px">${id?`<button class="del" onclick="delDish('${id}')">Löschen</button>`:''}<span class="grow"></span>
+ <button onclick="dlg.close()">Abbrechen</button><button class="pri" onclick="saveDish('${d.id}')">Speichern</button></div>`;
+ dl.showModal()}
+function saveDish(id){
+ const name=$('#fn').value.trim();if(!name)return alert('Name fehlt');
+ const o={id,name,cat:$('#fc').value,side:$('#fs').value,eff:+$('#fe').value,fav:$('#ff').checked,off:$('#fo').checked,
+  ing:$('#fi').value.split('\n').map(s=>s.trim()).filter(Boolean)};
+ const i=S.dishes.findIndex(d=>d.id===id);i<0?S.dishes.push(o):S.dishes[i]=o;$('#dlg').close();save();render()}
+function delDish(id){if(!confirm('Gericht löschen?'))return;S.dishes=S.dishes.filter(d=>d.id!==id);for(const k in S.plan)if(S.plan[k].id===id)delete S.plan[k];$('#dlg').close();save();render()}
+
+function shopItems(){
+ const t=today(),m=new Map();
+ for(let i=0;i<S.settings.shopDays;i++){const p=S.plan[addD(t,i)],d=p&&dish(p.id);if(!d)continue;
+  (d.ing||[]).forEach(x=>{const k=x.toLowerCase();const e=m.get(k)||{n:x,c:0,from:[]};e.c++;e.from.push(d.name);m.set(k,e)})}
+ return [...m.values()].sort((a,b)=>a.n.localeCompare(b.n))}
+function vShop(){
+ const it=shopItems(),ck=S.shop.checked;
+ let h=`<div class="row"><span class="mu grow">Für die nächsten ${S.settings.shopDays} Tage</span><button onclick="resetShop()">Haken zurücksetzen</button></div>`;
+ h+=`<div class="card">${it.length?it.map(e=>`<label class="chk ${ck[e.n.toLowerCase()]?'done':''}"><input type="checkbox" ${ck[e.n.toLowerCase()]?'checked':''} onchange="tick('${esc(e.n.toLowerCase())}')"><span class="grow">${esc(e.n)}${e.c>1?` <b>×${e.c}</b>`:''}<br><span class="mu">${esc([...new Set(e.from)].join(', '))}</span></span></label>`).join(''):'<span class="mu">Keine Zutaten im geplanten Zeitraum.</span>'}</div>`;
+ h+=`<h2>Zusätzlich</h2><div class="card">${S.shop.extra.map((e,i)=>`<label class="chk ${e.done?'done':''}"><input type="checkbox" ${e.done?'checked':''} onchange="S.shop.extra[${i}].done=!S.shop.extra[${i}].done;save();render()"><span class="grow">${esc(e.n)}</span><button class="del" onclick="S.shop.extra.splice(${i},1);save();render()">✕</button></label>`).join('')}
+ <div class="row" style="margin-top:8px"><input id="ex" placeholder="z. B. Spülmittel" onkeydown="if(event.key=='Enter')addExtra()"><button onclick="addExtra()">＋</button></div></div>`;
+ return h}
+function tick(k){S.shop.checked[k]=!S.shop.checked[k];save();render()}
+function resetShop(){S.shop.checked={};S.shop.extra=S.shop.extra.filter(e=>!e.done);save();render()}
+function addExtra(){const v=$('#ex').value.trim();if(v){S.shop.extra.push({n:v,done:false});save();render()}}
+
+function vSet(){
+ const st=S.settings,tg=(k,l)=>`<div class="sw"><span>${l}</span><input type="checkbox" ${st[k]?'checked':''} onchange="S.settings.${k}=this.checked;save()"></div>`;
+ const num=(k,l,min,max)=>`<label>${l}</label><input type="number" min="${min}" max="${max}" value="${st[k]}" onchange="S.settings.${k}=Math.max(${min},+this.value||${min});save()">`;
+ const dbx=localStorage.getItem('dbx_refresh');
+ return `<h2>Generator-Regeln</h2><div class="card">
+ ${num('noRepeat','Keine Wiederholung innerhalb von X Tagen',0,60)}
+ ${tg('varyCat','Kategorie nicht zweimal hintereinander')}
+ ${tg('varySide','Beilage nicht zweimal hintereinander')}
+ ${tg('quickWeekdays','Unter der Woche schnell, Aufwendiges eher am Wochenende')}
+ ${num('favWeight','Favoriten-Gewichtung (1 = normal)',1,10)}</div>
+ <h2>Listen</h2><div class="card">
+ <label>Kategorien (kommagetrennt)</label><input value="${esc(st.cats.join(', '))}" onchange="S.settings.cats=this.value.split(',').map(s=>s.trim()).filter(Boolean);save()">
+ <label>Beilagen (kommagetrennt)</label><input value="${esc(st.sides.join(', '))}" onchange="S.settings.sides=this.value.split(',').map(s=>s.trim()).filter(Boolean);save()">
+ ${num('shopDays','Einkaufsliste für die nächsten X Tage',1,31)}</div>
+ <h2>Dropbox-Sync</h2><div class="card">
+ <label>Dropbox App-Key</label><input id="ak" value="${esc(localStorage.getItem('dbx_key')||'')}" onchange="localStorage.setItem('dbx_key',this.value.trim())">
+ <p class="mu">Redirect-URI in der Dropbox-App eintragen: <b>${esc(redirect())}</b></p>
+ <div class="row">${dbx?`<button class="pri grow" onclick="syncNow()">Jetzt synchronisieren</button><button class="del" onclick="localStorage.removeItem('dbx_refresh');localStorage.removeItem('dbx_access');render();status()">Trennen</button>`:`<button class="pri grow" onclick="dbxLogin()">Mit Dropbox verbinden</button>`}</div></div>
+ <h2>Daten</h2><div class="card row"><button class="grow" onclick="exportJson()">Export</button><button class="grow" onclick="importJson()">Import</button></div>`}
+function exportJson(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S,null,1)],{type:'application/json'}));a.download='essensplan.json';a.click()}
+function importJson(){const i=document.createElement('input');i.type='file';i.accept='.json';i.onchange=async()=>{try{S=Object.assign(structuredClone(DEF),JSON.parse(await i.files[0].text()));save();render()}catch{alert('Ungültige Datei')}};i.click()}
+
+const VIEWS={plan:['Plan',vPlan],dishes:['Gerichte',vDishes],shop:['Einkauf',vShop],set:['Einstellungen',vSet]};
+function render(){$('#ttl').textContent=VIEWS[tab][0];$('#v').innerHTML=VIEWS[tab][1]();document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.t==tab))}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;render();scrollTo(0,0)});
+const dlg=$('#dlg');
+
+/* ---------- Dropbox (PKCE, offline) ---------- */
+const redirect=()=>location.origin+location.pathname;
+const b64u=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+async function dbxLogin(){
+ const key=localStorage.getItem('dbx_key');if(!key)return alert('Bitte zuerst App-Key eintragen.');
+ const v=b64u(crypto.getRandomValues(new Uint8Array(32)));localStorage.setItem('dbx_verifier',v);
+ const ch=b64u(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)));
+ location.href=`https://www.dropbox.com/oauth2/authorize?client_id=${key}&response_type=code&code_challenge=${ch}&code_challenge_method=S256&token_access_type=offline&redirect_uri=${encodeURIComponent(redirect())}`}
+async function tokenReq(p){
+ const r=await fetch('https://api.dropboxapi.com/oauth2/token',{method:'POST',body:new URLSearchParams({client_id:localStorage.getItem('dbx_key'),...p})});
+ if(!r.ok)throw new Error('Token '+r.status);const j=await r.json();
+ localStorage.setItem('dbx_access',j.access_token);localStorage.setItem('dbx_exp',Date.now()+(j.expires_in-60)*1000);
+ if(j.refresh_token)localStorage.setItem('dbx_refresh',j.refresh_token);return j.access_token}
+async function handleRedirect(){
+ const c=new URLSearchParams(location.search).get('code');if(!c)return;
+ history.replaceState(null,'',redirect());
+ try{await tokenReq({grant_type:'authorization_code',code:c,code_verifier:localStorage.getItem('dbx_verifier'),redirect_uri:redirect()});await syncNow()}
+ catch(e){alert('Dropbox-Verbindung fehlgeschlagen: '+e.message)}}
+async function token(){
+ if(!localStorage.getItem('dbx_refresh'))return null;
+ if(Date.now()<+localStorage.getItem('dbx_exp'))return localStorage.getItem('dbx_access');
+ return tokenReq({grant_type:'refresh_token',refresh_token:localStorage.getItem('dbx_refresh')})}
+async function pull(){
+ const t=await token();if(!t)return null;
+ const r=await fetch('https://content.dropboxapi.com/2/files/download',{method:'POST',headers:{Authorization:'Bearer '+t,'Dropbox-API-Arg':JSON.stringify({path:FILE})}});
+ if(r.status==409)return{};if(!r.ok)throw new Error('Download '+r.status);return r.json()}
+async function push(){
+ const t=await token();if(!t)return;
+ const r=await fetch('https://content.dropboxapi.com/2/files/upload',{method:'POST',headers:{Authorization:'Bearer '+t,'Content-Type':'application/octet-stream','Dropbox-API-Arg':JSON.stringify({path:FILE,mode:'overwrite',mute:true})},body:JSON.stringify(S)});
+ if(!r.ok)throw new Error('Upload '+r.status)}
+let pt;function schedulePush(){if(!localStorage.getItem('dbx_refresh'))return;status('…');clearTimeout(pt);pt=setTimeout(()=>push().then(()=>status('✓ synchron')).catch(e=>status('⚠︎ '+e.message)),1500)}
+async function syncNow(){
+ if(!localStorage.getItem('dbx_refresh'))return status();
+ status('…');
+ try{const r=await pull();
+  if(r&&(r.updated||0)>(S.updated||0)){S=Object.assign(structuredClone(DEF),r);localStorage.setItem(KEY,JSON.stringify(S));render()}
+  else if(r&&(r.updated||0)<(S.updated||0))await push();
+  status('✓ synchron')}catch(e){status('⚠︎ '+e.message)}}
+function status(t){$('#sync').textContent=localStorage.getItem('dbx_refresh')?('Dropbox '+(t||'')):''}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncNow()});
+
+render();status();handleRedirect().then(syncNow);
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
